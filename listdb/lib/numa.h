@@ -37,7 +37,7 @@ void Numa::Init() {
 int Numa::CpuSequenceRR(const int num) {
   assert(is_initialized_ == true);
   const int socket = num % num_sockets_;
-  const int seq_in_socket = num / num_sockets_;
+  const int seq_in_socket = (num) / num_sockets_;
   return table_[socket][seq_in_socket];
 }
 

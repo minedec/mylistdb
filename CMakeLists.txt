@@ -115,6 +115,7 @@ set(test_srcs
 endif(STRING_KEY)
 foreach (test_src ${test_srcs})
   get_filename_component(test_name ${test_src} NAME_WE)
+  link_directories(/usr/local/lib)
   add_executable(${test_name} ${test_src}
     #listdb/listdb.cc
     )
@@ -150,6 +151,7 @@ set(ubench_srcs
   )
 foreach (ubench_src ${ubench_srcs})
   get_filename_component(ubench_name ${ubench_src} NAME_WE)
+  link_directories(/usr/local/lib)
   add_executable(${ubench_name} ${ubench_src}
     #listdb/listdb.cc
     #listdb/lsm/table.cc
@@ -198,30 +200,30 @@ endforeach()
 
 ###
 ## Benchmarks
-#file(GLOB BENCHMAKR_SRC ${PROJECT_SOURCE_DIR}/bench/*.cc)
-#foreach (BENCHMARK ${BENCHMAKR_SRC})
-#  get_filename_component(BENCHMARK_NAME ${BENCHMARK} NAME_WE)
-#  add_executable(${BENCHMARK_NAME} ${BENCHMARK})
-#  target_link_libraries(${BENCHMARK_NAME} ${LINK_FLAGS})
-#  target_link_libraries(${BENCHMARK_NAME} brdb)
-#endforeach()
+file(GLOB BENCHMAKR_SRC ${PROJECT_SOURCE_DIR}/bench/*.cc)
+foreach (BENCHMARK ${BENCHMAKR_SRC})
+ get_filename_component(BENCHMARK_NAME ${BENCHMARK} NAME_WE)
+ add_executable(${BENCHMARK_NAME} ${BENCHMARK})
+ target_link_libraries(${BENCHMARK_NAME} ${LINK_FLAGS})
+ target_link_libraries(${BENCHMARK_NAME} brdb)
+endforeach()
 
 ###
 ## YCSB 
-#function(ycsb_benchmark ycsb_test_file)
-#	# get_filename_component(ycsb_test_target_name "${ycsb_test_file}" NAME_WE)
-#	get_filename_component(ycsb_test_target_name "ycsb" NAME_WE)
-#	add_executable("${ycsb_test_target_name}" "")
-#	target_sources("${ycsb_test_target_name}"
-#		PRIVATE
-#		"ycsb/src/brdb_client.cc"
-#		"ycsb/core/core_workload.cc"
-#		"${ycsb_test_file}"
-#		)
-#	target_link_libraries("${ycsb_test_target_name}" brdb)
+# function(ycsb_benchmark ycsb_test_file)
+# 	# get_filename_component(ycsb_test_target_name "${ycsb_test_file}" NAME_WE)
+# 	get_filename_component(ycsb_test_target_name "ycsb" NAME_WE)
+# 	add_executable("${ycsb_test_target_name}" "")
+# 	target_sources("${ycsb_test_target_name}"
+# 		PRIVATE
+# 		"ycsb/src/brdb_client.cc"
+# 		"ycsb/core/core_workload.cc"
+# 		"${ycsb_test_file}"
+# 		)
+# 	target_link_libraries("${ycsb_test_target_name}" brdb)
 #  target_link_libraries(${ycsb_test_target_name} stdc++fs)
-#endfunction(ycsb_benchmark)
-#ycsb_benchmark("${PROJECT_SOURCE_DIR}/ycsb/src/main.cc")
+# endfunction(ycsb_benchmark)
+# ycsb_benchmark("${PROJECT_SOURCE_DIR}/ycsb/src/main.cc")
 
 
 ###

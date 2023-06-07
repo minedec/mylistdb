@@ -250,7 +250,7 @@ ListDB::~ListDB() {
 }
 
 void ListDB::Init() {
-  std::string db_path = "/pmem/wkim/listdb";
+  std::string db_path = "/mnt/pmem0/wkim/listdb";
   fs::remove_all(db_path);
   int root_pool_id = Pmem::BindPool<pmem_db>(db_path, "", 64*1024*1024);
   if (root_pool_id != 0) {
@@ -272,7 +272,7 @@ void ListDB::Init() {
   // Log Pmem Pool
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "/pmem" << i << "/wkim/listdb_log";
+    pss << "/mnt/pmem" << i << "/wkim/listdb_log";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -313,7 +313,7 @@ void ListDB::Init() {
   // WAL
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "/pmem" << i << "/wkim/listdb_nonunified_l0";
+    pss << "/mnt/pmem" << i << "/wkim/listdb_nonunified_l0";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -340,7 +340,7 @@ void ListDB::Init() {
 #ifdef LISTDB_WISCKEY
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "/pmem" << i << "/wkim/listdb_value";
+    pss << "/mnt/pmem" << i << "/wkim/listdb_value";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -366,7 +366,7 @@ void ListDB::Init() {
   // Pmem Pool for L1
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "/pmem" << i << "/wkim/listdb_l1";
+    pss << "/mnt/pmem" << i << "/wkim/listdb_l1";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -490,7 +490,7 @@ void ListDB::Init() {
 }
 
 void ListDB::Open() {
-  std::string db_path = "/pmem/wkim/listdb";
+  std::string db_path = "/mnt/pmem0/wkim/listdb";
   int root_pool_id = Pmem::BindPool<pmem_db>(db_path, "", 64*1024*1024);
   if (root_pool_id != 0) {
     std::cerr << "root_pool_id must be zero (current: " << root_pool_id << ")\n";
@@ -502,7 +502,7 @@ void ListDB::Open() {
   // Log Pmem Pool
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "/pmem" << i << "/wkim/listdb_log";
+    pss << "/mnt/pmem" << i << "/wkim/listdb_log";
     std::string path = pss.str();
     std::string poolset = path + ".set";
 
@@ -531,7 +531,7 @@ void ListDB::Open() {
 #ifdef LISTDB_WISCKEY
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "/pmem" << i << "/wkim/listdb_value";
+    pss << "/mnt/pmem" << i << "/wkim/listdb_value";
     std::string path = pss.str();
     std::string poolset = path + ".set";
 
