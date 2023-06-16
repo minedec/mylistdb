@@ -103,6 +103,8 @@ set(test_srcs
   listdb/pmem/pmem_test.cc
   listdb/lib/numa_test.cc
   listdb/core/skiplist_cache_test.cc
+  listdb/db_client_test.cc
+  listdb/core/delegate_test.cc
   )
 else()
 set(test_srcs
@@ -111,6 +113,7 @@ set(test_srcs
   listdb/db_client_test.cc
   listdb/index/braided_pmem_skiplist_test.cc
   listdb/core/skiplist_cache_test.cc
+  listdb/core/delegate_test.cc
   )
 endif(STRING_KEY)
 foreach (test_src ${test_srcs})

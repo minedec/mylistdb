@@ -1,12 +1,19 @@
 #include <iostream>
+#include <vector>
 
 #include "listdb/listdb.h"
 #include "listdb/db_client.h"
+#include "listdb/core/delegate.h"
+
+class DelegatePool;
 
 int main() {
   ListDB* db = new ListDB();
   db->Init();
-  DBClient* client = new DBClient(db, 0, 0);
+  DelegatePool* dp = new DelegatePool();
+  dp->Init();
+  db->delegate_pool = dp;
+  DBClient* client = new DBClient(db, 0, 1);
 
   client->Put(10, 10);
   client->Put(1, 1);

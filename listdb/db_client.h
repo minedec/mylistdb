@@ -3,11 +3,64 @@
 
 #include <algorithm>
 #include <vector>
+#include <future>
 
 #include "listdb/common.h"
 #include "listdb/listdb.h"
 #include "listdb/util.h"
 #include "listdb/util/random.h"
+
+#include "listdb/core/delegate.h"
+
+class DBClient;
+
+enum DelegateType {       
+  kPut, 
+  kGet
+};
+
+struct Task {
+  Key key = 0;
+  Value value;
+  Value* pvalue = nullptr;
+  int type = -1;
+  std::promise<Value*>* promise = nullptr;
+  DBClient* client = nullptr;
+  int region;
+};
+
+struct DelegateWorkerData {
+  int id;
+  int region;
+  int index;
+  bool stop;
+  std::queue<Task*> q; 
+  std::mutex mu;
+  std::condition_variable cv;
+  Task* current_task;
+};
+
+class DelegatePool {
+public:
+  void Init();
+
+  void Close();
+
+  void BackgroundMainLoop();
+
+  void BackgroundDelegateLoop(DelegateWorkerData*);
+
+  void AddTask(Task* task);
+  
+public:
+  ListDB* db_;
+
+private:
+  DelegateWorkerData worker_data_[kNumRegions][kDelegateNumWorkers];
+  std::thread worker_thread_[kNumRegions][kDelegateNumWorkers];
+  int tasks_assigned_num[kNumRegions][kDelegateNumWorkers];
+};
+
 
 #define LEVEL_CHECK_PERIOD_FACTOR 1
 
@@ -21,13 +74,21 @@ class DBClient {
 
   void SetRegion(int region);
 
+  int GetRegion();
+
   void Put(const Key& key, const Value& value);
 
   bool Get(const Key& key, Value* value_out);
 
+  void PutHook(const Key& key, const Value& value);
+
+  bool GetHook(const Key& key, Value* value_out);
+
 #if defined(LISTDB_STRING_KEY) && defined(LISTDB_WISCKEY)
   void PutStringKV(const std::string_view& key_sv, const std::string_view& value);
   bool GetStringKV(const std::string_view& key_sv, Value* value_out);
+  void PutStringKVHook(const std::string_view& key_sv, const std::string_view& value);
+  bool GetStringKVHook(const std::string_view& key_sv, Value* value_out);
 #endif
   
   //void ReserveLatencyHistory(size_t size);
@@ -77,6 +138,7 @@ class DBClient {
 #endif
 
   //std::vector<std::chrono::duration<double>> latencies_;
+  DelegatePool* dp_ = nullptr;
 };
 
 DBClient::DBClient(ListDB* db, int id, int region) : db_(db), id_(id), region_(region % kNumRegions), rnd_(id) {
@@ -88,6 +150,9 @@ DBClient::DBClient(ListDB* db, int id, int region) : db_(db), id_(id), region_(r
   }
   l0_pool_id_ = db_->l0_pool_id(region_);
   l1_pool_id_ = db_->l1_pool_id(region_);
+
+  // DG
+  dp_ = db_->delegate_pool;
 }
 
 void DBClient::SetRegion(int region) {
@@ -100,7 +165,21 @@ void DBClient::SetRegion(int region) {
   }
 }
 
+int DBClient::GetRegion() {
+  return region_;
+}
+
 void DBClient::Put(const Key& key, const Value& value) {
+  Task *t = new Task();
+  t->type = 1; // kPut = 1
+  t->key = key;
+  t->value = value;
+  t->client = this;
+  t->region = region_;
+  dp_->AddTask(t);
+}
+
+void DBClient::PutHook(const Key& key, const Value& value) {
 #ifndef GROUP_LOGGING
   int s = KeyShard(key);
 
@@ -195,20 +274,23 @@ void DBClient::Put(const Key& key, const Value& value) {
   skiplist->Insert(node);
   mem->w_UnRef();
 #endif
-
-  //size_t log_alloc_size = util::AlignedSize(8, LogWriter::Entry::ComputeAllocSize(key, height));
-  //size_t node_alloc_size = util::AlignedSize(8, MemNode::ComputeAllocSize(key, height));
-
-  //put_group_[s].emplace_back(key, value, height, log_alloc_size, node_alloc_size);
-  //group_state_[s].kv_size += key.size() + /* value.size() */ 8;
-  //group_state_[s].log_alloc_size += log_alloc_size;
-  //group_state_[s].node_alloc_size += node_alloc_size;
-  //if (group_state_[s].log_alloc_size >= 1024) {
-  //  ProcessPutGroup(s);
-  //}
 }
 
 bool DBClient::Get(const Key& key, Value* value_out) {
+  Task* t = new Task();
+  t->type = 0; // kGet = 0
+  t->key = key;
+  t->client = this;
+  t->region = region_;
+  t->pvalue = value_out;
+  t->promise = new std::promise<Value*>();
+  dp_->AddTask(t);
+  value_out = t->promise->get_future().get();
+  delete t;
+  return true;
+}
+
+bool DBClient::GetHook(const Key& key, Value* value_out) {
   int s = KeyShard(key);
   {
     MemTableList* tl = (MemTableList*) db_->GetTableList(0, s);
@@ -680,6 +762,91 @@ PmemPtr DBClient::LookupL1(const Key& key, const int pool_id, BraidedPmemSkipLis
     break;
   }
   return curr_paddr_dump;
+}
+
+
+
+void DelegatePool::Close() {
+  if(main_delegate_thread.joinable()) {
+    main_delegate_thread.join();
+  }
+
+  for(int i = 0; i < kNumRegions; i++) {
+    for(int j = 0; j < kDelegateNumWorkers; j++) {
+      worker_data_[i][j].stop = true;
+      worker_data_[i][j].cv.notify_one();
+      if(worker_thread_[i][j].joinable()) {
+        worker_thread_[i][j].join();
+      }
+    }
+  }
+}
+
+void DelegatePool::Init() {
+  main_delegate_thread = std::thread(std::bind(&DelegatePool::BackgroundMainLoop, this));
+
+  for(int i = 0; i < kNumRegions; i++) {
+    for(int j = 0; j < kDelegateNumWorkers; j++) {
+      worker_data_[i][j].id = i * kDelegateNumWorkers + j;
+      worker_data_[i][j].region = i;
+      worker_data_[i][j].index = j;
+      worker_data_[i][j].stop = false;
+      worker_thread_[i][j] = std::thread(std::bind(&DelegatePool::BackgroundDelegateLoop,this, &worker_data_[i][j]));
+      // worker_thread_[i][j].detach();
+    }
+  }
+}
+
+void DelegatePool::AddTask(Task* task) {
+  int region = task->client->GetRegion();
+  DelegateWorkerData* available_worker;
+  int index = 0;
+  for(index = 0; index < kDelegateNumWorkers; index++) {
+    if(tasks_assigned_num[region][index] < kDelegateQueueDepth) {
+      available_worker = &worker_data_[region][index];
+      break;
+    }
+  }
+  assert(available_worker != nullptr);
+  tasks_assigned_num[region][index]++;
+  available_worker->q.push(task);
+  available_worker->cv.notify_one();
+}
+
+void DelegatePool::BackgroundMainLoop() {
+  
+}
+
+void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
+  // Bind thread to numa region
+  struct bitmask *mask = numa_bitmask_alloc(numa_num_possible_nodes());
+  numa_bitmask_setbit(mask, data->region);
+  numa_bind(mask);
+  numa_bitmask_free(mask);
+
+  while(true) {
+    std::unique_lock<std::mutex> lk(data->mu);
+    data->cv.wait(lk, [&] {return data->stop || !data->q.empty();});
+    
+    if(data->stop) break;
+
+    Task* task = data->q.front();
+    data->q.pop();
+    data->current_task = task;
+    lk.unlock();
+
+    switch(task->type) {
+      case 0:
+        task->client->GetHook(task->key, task->pvalue);
+        task->promise->set_value(task->pvalue);
+        break;
+      case 1:
+        task->client->PutHook(task->key, task->value);
+        delete task;
+        break;
+    }
+    tasks_assigned_num[data->region][data->index]--;
+  }
 }
 
 #endif  // LISTDB_DB_CLIENT_H_

@@ -1283,7 +1283,7 @@ class Benchmark {
     ThreadState* thread = arg->thread;
 
     int id = thread->tid;
-    SetAffinity(Numa::CpuSequenceRR(id));
+    // SetAffinity(Numa::CpuSequenceRR(id));
     int r = GetChip();
     DBClient* client = new DBClient(arg->bm->db(), id, r);
     thread->client = client;

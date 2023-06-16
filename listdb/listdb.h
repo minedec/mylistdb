@@ -41,6 +41,9 @@
 #include "listdb/util/reporter.h"
 #include "listdb/util/reporter_client.h"
 
+// #include "listdb/core/delegate.h"
+class DelegatePool;
+
 #define L0_COMPACTION_ON_IDLE
 #define L0_COMPACTION_YIELD
 
@@ -241,6 +244,10 @@ class ListDB {
 
   std::atomic<Reporter*> reporter_;
   std::mutex mu_;
+
+  // DG
+public: 
+  DelegatePool* delegate_pool = nullptr;
 };
 
 
@@ -487,6 +494,13 @@ void ListDB::Init() {
     //sch.sched_priority = 20;
     //pthread_setschedparam(worker_threads_[i].native_handle(), SCHED_FIFO, &sch);
   }
+
+  // DG
+  // if(delegate_pool == nullptr) {
+  //   delegate_pool = new DelegatePool();
+  //   delegate_pool->db_ = this;
+  // }
+  // delegate_pool->Init();
 }
 
 void ListDB::Open() {
