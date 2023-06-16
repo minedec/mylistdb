@@ -1,0 +1,1 @@
+../build/db_bench --benchmarks="fillseq,readrandom" --num=1000 --threads=10

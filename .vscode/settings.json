@@ -40,7 +40,8 @@
     "stdexcept": "cpp",
     "cinttypes": "cpp",
     "typeinfo": "cpp",
-    "condition_variable": "cpp"
+    "condition_variable": "cpp",
+    "thread": "cpp"
   },
   "cmake.configureOnOpen": false
 }

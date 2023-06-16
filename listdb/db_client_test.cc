@@ -27,5 +27,7 @@ int main() {
   client->Get(5, &val_read);
   std::cout << *(PmemPtr::Decode<uint64_t>(val_read)) << std::endl;
 
+  dp->Close();
+  db->Close();
   return 0;
 }

@@ -14,7 +14,7 @@
 #include "listdb/common.h"
 
 static const int kDelegateQueueDepth = 4;
-static const int kDelegateNumWorkers = 1;
+static const int kDelegateNumWorkers = 20;
 static std::thread main_delegate_thread;
 
 
