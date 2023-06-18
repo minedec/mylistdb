@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <vector>
 #include <future>
+#include <atomic>
 
 #include "listdb/common.h"
 #include "listdb/listdb.h"
@@ -21,6 +22,10 @@ enum DelegateType {
 
 struct Task {
   Key key = 0;
+#if defined(LISTDB_STRING_KEY) && defined(LISTDB_WISCKEY)
+  std::string_view string_key;
+  std::string_view string_value;
+#endif
   Value value;
   Value* pvalue = nullptr;
   int type = -1;
@@ -59,6 +64,12 @@ private:
   DelegateWorkerData worker_data_[kNumRegions][kDelegateNumWorkers];
   std::thread worker_thread_[kNumRegions][kDelegateNumWorkers];
   int tasks_assigned_num[kNumRegions][kDelegateNumWorkers];
+  std::deque<Task*> worker_requests_;
+  std::mutex task_mu_;
+  std::condition_variable task_cv_;
+  std::atomic_int finish_cnt = {0};
+  std::atomic_int available_cnt = {kNumRegions * kDelegateNumWorkers};
+  bool stop_;
 };
 
 
@@ -171,7 +182,7 @@ int DBClient::GetRegion() {
 
 void DBClient::Put(const Key& key, const Value& value) {
   Task *t = new Task();
-  t->type = 1; // kPut = 1
+  t->type = 0; // kPut = 0
   t->key = key;
   t->value = value;
   t->client = this;
@@ -278,7 +289,7 @@ void DBClient::PutHook(const Key& key, const Value& value) {
 
 bool DBClient::Get(const Key& key, Value* value_out) {
   Task* t = new Task();
-  t->type = 0; // kGet = 0
+  t->type = 1; // kGet = 1
   t->key = key;
   t->client = this;
   t->region = region_;
@@ -377,6 +388,16 @@ bool DBClient::GetHook(const Key& key, Value* value_out) {
 
 #if defined(LISTDB_STRING_KEY) && defined(LISTDB_WISCKEY)
 void DBClient::PutStringKV(const std::string_view& key_sv, const std::string_view& value) {
+  Task *t = new Task();
+  t->type = 2; // kStringPut = 2
+  t->string_key = key_sv;
+  t->string_value = value;
+  t->client = this;
+  t->region = region_;
+  dp_->AddTask(t);
+}
+
+void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string_view& value) {
   Key& key = *((Key*) key_sv.data());
   //if (!key.Valid()) {
   //  fprintf(stdout, "key is not valid: %s, %zu, key_num=%zu\n", std::string(key_sv).c_str(), *((uint64_t*) key.data()), key.key_num());
@@ -425,7 +446,21 @@ void DBClient::PutStringKV(const std::string_view& key_sv, const std::string_vie
 }
 
 bool DBClient::GetStringKV(const std::string_view& key_sv, Value* value_out) {
-  Key& key = *((Key*) key_sv.data());
+  Task* t = new Task();
+  t->type = 3; // kGetStringKV = 3
+  t->string_key = key_sv;
+  t->client = this;
+  t->region = region_;
+  t->pvalue = value_out;
+  t->promise = new std::promise<Value*>();
+  dp_->AddTask(t);
+  value_out = t->promise->get_future().get();
+  delete t;
+  return true;
+}
+
+bool DBClient::GetStringKVHook(const std::string_view& key_sv, Value* value_out) {
+Key& key = *((Key*) key_sv.data());
   int s = KeyShard(key);
   {
     MemTableList* tl = (MemTableList*) db_->GetTableList(0, s);
@@ -767,6 +802,8 @@ PmemPtr DBClient::LookupL1(const Key& key, const int pool_id, BraidedPmemSkipLis
 
 
 void DelegatePool::Close() {
+  stop_ = true;
+  task_cv_.notify_one();
   if(main_delegate_thread.joinable()) {
     main_delegate_thread.join();
   }
@@ -780,6 +817,8 @@ void DelegatePool::Close() {
       }
     }
   }
+
+  printf("delegate finish %d tasks\n", finish_cnt.load(std::memory_order_relaxed));
 }
 
 void DelegatePool::Init() {
@@ -795,26 +834,49 @@ void DelegatePool::Init() {
       // worker_thread_[i][j].detach();
     }
   }
+
+  printf("init delegatepool, region nums %d, per region workers %d\n", kNumRegions, kDelegateNumWorkers);
 }
 
 void DelegatePool::AddTask(Task* task) {
-  int region = task->client->GetRegion();
-  DelegateWorkerData* available_worker;
-  int index = 0;
-  for(index = 0; index < kDelegateNumWorkers; index++) {
-    if(tasks_assigned_num[region][index] < kDelegateQueueDepth) {
-      available_worker = &worker_data_[region][index];
-      break;
-    }
-  }
-  assert(available_worker != nullptr);
-  tasks_assigned_num[region][index]++;
-  available_worker->q.push(task);
-  available_worker->cv.notify_one();
+  std::unique_lock<std::mutex> lk(task_mu_);
+  worker_requests_.push_back(task);
+  task_cv_.notify_one();
+  lk.unlock();
 }
 
 void DelegatePool::BackgroundMainLoop() {
-  
+
+  while(true) {
+    std::deque<Task*> new_work_requests;
+    std::unique_lock<std::mutex> lk(task_mu_);
+    task_cv_.wait(lk, [&] {return !worker_requests_.empty() || stop_;});
+    if(stop_) {
+      printf("task main thread quit\n");
+      break;
+    }
+    
+    new_work_requests.swap(worker_requests_);
+    for(auto& task : new_work_requests) {
+      int region = task->client->GetRegion();
+      DelegateWorkerData* available_worker = nullptr;
+      int index = 0;
+      while(available_cnt.load(std::memory_order_relaxed) == 0);
+      for(index = 0; index < kDelegateNumWorkers; index++) {
+        if(tasks_assigned_num[region][index] < kDelegateQueueDepth) {
+          available_worker = &worker_data_[region][index];
+          available_cnt--;
+          break;
+        }
+      }
+      assert(available_worker != nullptr);
+      tasks_assigned_num[region][index]++;
+      std::unique_lock<std::mutex> lk(available_worker->mu);
+      available_worker->q.push(task);
+      available_worker->cv.notify_one();
+      lk.unlock();
+    }
+  }
 }
 
 void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
@@ -837,15 +899,27 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
 
     switch(task->type) {
       case 0:
-        task->client->GetHook(task->key, task->pvalue);
-        task->promise->set_value(task->pvalue);
-        break;
-      case 1:
         task->client->PutHook(task->key, task->value);
         delete task;
         break;
+      case 1:
+        task->client->GetHook(task->key, task->pvalue);
+        task->promise->set_value(task->pvalue);
+        break;
+#if defined(LISTDB_STRING_KEY) && defined(LISTDB_WISCKEY)
+      case 2:
+        task->client->PutStringKVHook(task->string_key, task->string_value);
+        delete task;
+        break;
+      case 3:
+        task->client->GetStringKVHook(task->string_key, task->pvalue);
+        task->promise->set_value(task->pvalue);
+        break;
+#endif
     }
     tasks_assigned_num[data->region][data->index]--;
+    available_cnt++;
+    finish_cnt++;
   }
 }
 

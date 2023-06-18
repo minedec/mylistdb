@@ -13,8 +13,8 @@
 #include <syscall.h>
 #include "listdb/common.h"
 
-static const int kDelegateQueueDepth = 4;
-static const int kDelegateNumWorkers = 20;
+static const int kDelegateQueueDepth = 4096;
+static const int kDelegateNumWorkers = 40;
 static std::thread main_delegate_thread;
 
 

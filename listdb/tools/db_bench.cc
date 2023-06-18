@@ -37,6 +37,8 @@ int main() {
 #include "listdb/util/random.h"
 #include "listdb/util/rate_limiter.h"
 
+#include "listdb/core/delegate.h"
+
 using DB = ListDB;
 
 DEFINE_string(
@@ -887,6 +889,9 @@ class Benchmark {
         writes_(FLAGS_writes < 0 ? FLAGS_num : FLAGS_writes) {
     if (!FLAGS_use_existing_db) {
       db_->Init();
+      dp_ = new DelegatePool();
+      dp_->Init();
+      db_->delegate_pool = dp_;
     } else {
       abort();
       //db_->Open();
@@ -899,6 +904,8 @@ class Benchmark {
   }
 
   ~Benchmark() {
+    dp_->Close();
+    db_->Close();
   }
 
   std::string_view AllocateKey(std::unique_ptr<const char[]>* key_guard) {
@@ -2418,6 +2425,7 @@ class Benchmark {
 #endif // IMNOTDEFINED
 
   DB* db_;
+  DelegatePool* dp_;
   int64_t num_;
   int key_size_;
   int64_t entries_per_batch_;

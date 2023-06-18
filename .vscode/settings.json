@@ -41,7 +41,18 @@
     "cinttypes": "cpp",
     "typeinfo": "cpp",
     "condition_variable": "cpp",
-    "thread": "cpp"
+    "thread": "cpp",
+    "ctime": "cpp",
+    "bit": "cpp",
+    "chrono": "cpp",
+    "deque": "cpp",
+    "ratio": "cpp",
+    "system_error": "cpp",
+    "iostream": "cpp",
+    "mutex": "cpp",
+    "stop_token": "cpp",
+    "streambuf": "cpp",
+    "shared_mutex": "cpp"
   },
   "cmake.configureOnOpen": false
 }
