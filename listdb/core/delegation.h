@@ -15,7 +15,6 @@
 
 static const int kDelegateQueueDepth = 4096;
 static const int kDelegateNumWorkers = 40;
-static std::thread main_delegate_thread;
 
 
 

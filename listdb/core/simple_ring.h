@@ -36,7 +36,7 @@ public:
 
   RingBuffer* GetRingBuffer(int region, int index);
 
-private:
+public:
   RingBuffer ring_buffer_pool[kNumRegions][kDelegateNumWorkers];
 };
 

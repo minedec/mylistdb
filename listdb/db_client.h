@@ -11,7 +11,12 @@
 #include "listdb/util.h"
 #include "listdb/util/random.h"
 
-#include "listdb/core/delegation.h"
+// #ifdef MUTEX_DELEGATE
+  #include "listdb/core/delegation.h"
+// #endif
+#ifdef RING_DELEGATE
+  #include "listdb/core/simple_ring.h"
+#endif
 
 class DBClient;
 
@@ -39,11 +44,19 @@ struct DelegateWorkerData {
   int region;
   int index;
   bool stop;
-  std::queue<Task*> q; 
+  
   std::mutex mu;
   std::condition_variable cv;
   Task* current_task;
+#ifdef MUTEX_DELEGATE
+  std::queue<Task*> q;
+#endif 
+#ifdef RING_DELEGATE
+  RingBuffer* ring;
+#endif
 };
+
+static std::thread main_delegate_thread;
 
 class DelegatePool {
 public:
@@ -151,7 +164,12 @@ class DBClient {
 #endif
 
   //std::vector<std::chrono::duration<double>> latencies_;
+#ifdef MUTEX_DELEGATE
   DelegatePool* dp_ = nullptr;
+#endif
+#ifdef RING_DELEGATE
+  RingBufferPool* rbp_ = nullptr;
+#endif
 };
 
 DBClient::DBClient(ListDB* db, int id, int region) : db_(db), id_(id), region_(region % kNumRegions), rnd_(id) {
@@ -165,7 +183,12 @@ DBClient::DBClient(ListDB* db, int id, int region) : db_(db), id_(id), region_(r
   l1_pool_id_ = db_->l1_pool_id(region_);
 
   // DG
+#ifdef MUTEX_DELEGATE
   dp_ = db_->delegate_pool;
+#endif
+#ifdef RING_DELEGATE
+  rbp_ = db_->ring_buffer_pool;
+#endif
 }
 
 void DBClient::SetRegion(int region) {
@@ -189,7 +212,13 @@ void DBClient::Put(const Key& key, const Value& value) {
   t->value = value;
   t->client = this;
   t->region = region_;
+#ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
+#endif
+#ifdef RING_DELEGATE
+  int index = RandomPick();
+  rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t);
+#endif
 }
 
 void DBClient::PutHook(const Key& key, const Value& value) {
@@ -296,8 +325,15 @@ bool DBClient::Get(const Key& key, Value* value_out) {
   t->client = this;
   t->region = region_;
   t->pvalue = value_out;
+
   t->promise = new std::promise<Value*>();
+#ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
+#endif
+#ifdef RING_DELEGATE
+  int index = RandomPick();
+  rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t);
+#endif
   value_out = t->promise->get_future().get();
   delete t;
   return true;
@@ -804,6 +840,7 @@ PmemPtr DBClient::LookupL1(const Key& key, const int pool_id, BraidedPmemSkipLis
 
 
 void DelegatePool::Close() {
+#ifdef MUTEX_DELEGATE
   stop_ = true;
   task_cv_.notify_one();
   if(main_delegate_thread.joinable()) {
@@ -819,12 +856,14 @@ void DelegatePool::Close() {
       }
     }
   }
-
+#endif
   printf("delegate finish %d tasks\n", finish_cnt.load(std::memory_order_relaxed));
 }
 
 void DelegatePool::Init() {
+#ifdef MUTEX_DELEGATE
   main_delegate_thread = std::thread(std::bind(&DelegatePool::BackgroundMainLoop, this));
+#endif
 
   for(int i = 0; i < kNumRegions; i++) {
     for(int j = 0; j < kDelegateNumWorkers; j++) {
@@ -832,8 +871,10 @@ void DelegatePool::Init() {
       worker_data_[i][j].region = i;
       worker_data_[i][j].index = j;
       worker_data_[i][j].stop = false;
+#ifdef RING_DELEGATE
+      worker_data_[i][j].ring = &db_->ring_buffer_pool->ring_buffer_pool[i][j];
+#endif
       worker_thread_[i][j] = std::thread(std::bind(&DelegatePool::BackgroundDelegateLoop,this, &worker_data_[i][j]));
-      // worker_thread_[i][j].detach();
     }
   }
 
@@ -854,6 +895,7 @@ void DelegatePool::AddTask(Task* task) {
 void DelegatePool::BackgroundMainLoop() {
 
   while(true) {
+#ifdef MUTEX_DELEGATE
     std::deque<Task*> new_work_requests;
     std::unique_lock<std::mutex> lk(task_mu_);
     task_cv_.wait(lk, [&] {return !worker_requests_.empty() || stop_;});
@@ -882,6 +924,7 @@ void DelegatePool::BackgroundMainLoop() {
       available_worker->cv.notify_one();
       lk.unlock();
     }
+#endif
   }
 }
 
@@ -893,6 +936,7 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
   numa_bitmask_free(mask);
 
   while(true) {
+#ifdef MUTEX_DELEGATE
     std::unique_lock<std::mutex> lk(data->mu);
     data->cv.wait(lk, [&] {return data->stop || !data->q.empty();});
     
@@ -902,7 +946,10 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
     data->q.pop();
     data->current_task = task;
     lk.unlock();
+#endif
+#ifdef RING_DELEGATE
 
+#endif
     switch(task->type) {
       case 0:
         task->client->PutHook(task->key, task->value);
@@ -924,7 +971,9 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
 #endif
     }
     tasks_assigned_num[data->region][data->index]--;
+#ifdef MUTEX_DELEGATE
     available_cnt++;
+#endif
     finish_cnt++;
   }
 }

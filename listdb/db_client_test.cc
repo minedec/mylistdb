@@ -11,9 +11,11 @@ class DelegatePool;
 int main() {
   ListDB* db = new ListDB();
   db->Init();
+#ifdef MUTEX_DELEGATE
   DelegatePool* dp = new DelegatePool();
   dp->Init();
   db->delegate_pool = dp;
+#endif
   DBClient* client = new DBClient(db, 0, 1);
 
 #ifdef RING_DELEGATE
@@ -22,18 +24,17 @@ int main() {
   db->ring_buffer_pool = rbp;
 #endif
 
-  // client->Put(10, 10);
-  // client->Put(1, 1);
-  
-  // client->Put(5, 5);
+  client->Put(10, 10);
+  client->Put(1, 1);
+  client->Put(5, 5);
 
-  // uint64_t val_read;
-  // client->Get(10, &val_read);
-  // std::cout << *(PmemPtr::Decode<uint64_t>(val_read)) << std::endl;
-  // client->Get(1, &val_read);
-  // std::cout << *(PmemPtr::Decode<uint64_t>(val_read)) << std::endl;
-  // client->Get(5, &val_read);
-  // std::cout << *(PmemPtr::Decode<uint64_t>(val_read)) << std::endl;
+  uint64_t val_read;
+  client->Get(10, &val_read);
+  std::cout << *(PmemPtr::Decode<uint64_t>(val_read)) << std::endl;
+  client->Get(1, &val_read);
+  std::cout << *(PmemPtr::Decode<uint64_t>(val_read)) << std::endl;
+  client->Get(5, &val_read);
+  std::cout << *(PmemPtr::Decode<uint64_t>(val_read)) << std::endl;
 
 #if defined(LISTDB_STRING_KEY) && defined(LISTDB_WISCKEY)
   std::vector<std::string_view> keys;
@@ -54,7 +55,12 @@ int main() {
   }
 #endif
 
+#ifdef MUTEX_DELEGATE
   dp->Close();
+#endif
+#ifdef RING_DELEGATE
+  rbp->Close();
+#endif
   db->Close();
   return 0;
 }
