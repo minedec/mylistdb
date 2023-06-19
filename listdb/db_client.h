@@ -11,7 +11,7 @@
 #include "listdb/util.h"
 #include "listdb/util/random.h"
 
-#include "listdb/core/delegate.h"
+#include "listdb/core/delegation.h"
 
 class DBClient;
 
@@ -56,6 +56,8 @@ public:
   void BackgroundDelegateLoop(DelegateWorkerData*);
 
   void AddTask(Task* task);
+
+  int RandomPick();
   
 public:
   ListDB* db_;
@@ -836,6 +838,10 @@ void DelegatePool::Init() {
   }
 
   printf("init delegatepool, region nums %d, per region workers %d\n", kNumRegions, kDelegateNumWorkers);
+}
+
+int inline RandomPick() {
+  return random() % kDelegateNumWorkers;
 }
 
 void DelegatePool::AddTask(Task* task) {

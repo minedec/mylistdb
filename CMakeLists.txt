@@ -12,6 +12,23 @@ option(DEBUG "build debug mode." OFF)
 option(STRING_KEY "string key mode." OFF)
 option(WISCKEY "Store values in Wisckey manner." OFF)
 option(SKIPLIST_CACHE "SkipListCache." OFF)
+# DG
+option(MUTEX_DELEGATE "use mutex-delegate." OFF)
+option(RING_DELEGATE "use ring buffer delegate." OFF)
+
+if(MUTEX_DELEGATE)
+  message("[O] MUTEX_DELEGATE ENABLED.")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DMUTEX_DELEGATE")
+else()
+  message("[X] MUTEX_DELEGATE DISABLED.")
+endif(MUTEX_DELEGATE)
+
+if(RING_DELEGATE)
+  message("[O] RING_DELEGATE ENABLED.")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DRING_DELEGATE")
+else()
+  message("[X] RING_DELEGATE DISABLED")
+endif(RING_DELEGATE)
 
 if(DEBUG)
   message("[O] DEBUG MODE.")
@@ -105,6 +122,7 @@ set(test_srcs
   listdb/core/skiplist_cache_test.cc
   listdb/db_client_test.cc
   listdb/core/delegate_test.cc
+  listdb/core/simple_ring_test.cc
   )
 else()
 set(test_srcs
@@ -114,6 +132,7 @@ set(test_srcs
   listdb/index/braided_pmem_skiplist_test.cc
   listdb/core/skiplist_cache_test.cc
   listdb/core/delegate_test.cc
+  listdb/core/simple_ring_test.cc
   )
 endif(STRING_KEY)
 foreach (test_src ${test_srcs})

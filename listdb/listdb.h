@@ -41,7 +41,7 @@
 #include "listdb/util/reporter.h"
 #include "listdb/util/reporter_client.h"
 
-// #include "listdb/core/delegate.h"
+// #include "listdb/core/delegation.h"
 class DelegatePool;
 
 #define L0_COMPACTION_ON_IDLE

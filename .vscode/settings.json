@@ -52,7 +52,17 @@
     "mutex": "cpp",
     "stop_token": "cpp",
     "streambuf": "cpp",
-    "shared_mutex": "cpp"
+    "shared_mutex": "cpp",
+    "ctime": "cpp",
+    "bit": "cpp",
+    "chrono": "cpp",
+    "deque": "cpp",
+    "ratio": "cpp",
+    "system_error": "cpp",
+    "iostream": "cpp",
+    "mutex": "cpp",
+    "stop_token": "cpp",
+    "streambuf": "cpp"
   },
   "cmake.configureOnOpen": false
 }

@@ -1,5 +1,5 @@
 #include <iostream>
-#include "listdb/core/delegate.h"
+#include "listdb/core/delegation.h"
 #include "listdb/common.h"
 #include "listdb/db_client.h"
 

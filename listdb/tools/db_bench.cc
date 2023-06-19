@@ -37,7 +37,7 @@ int main() {
 #include "listdb/util/random.h"
 #include "listdb/util/rate_limiter.h"
 
-#include "listdb/core/delegate.h"
+#include "listdb/core/delegation.h"
 
 using DB = ListDB;
 

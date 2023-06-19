@@ -3,7 +3,7 @@
 
 #include "listdb/listdb.h"
 #include "listdb/db_client.h"
-#include "listdb/core/delegate.h"
+#include "listdb/core/delegation.h"
 
 class DelegatePool;
 
