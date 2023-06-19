@@ -4,6 +4,7 @@
 #include "listdb/listdb.h"
 #include "listdb/db_client.h"
 #include "listdb/core/delegation.h"
+#include "listdb/core/simple_ring.h"
 
 class DelegatePool;
 
@@ -15,8 +16,15 @@ int main() {
   db->delegate_pool = dp;
   DBClient* client = new DBClient(db, 0, 1);
 
+#ifdef RING_DELEGATE
+  RingBufferPool* rbp = new RingBufferPool();
+  rbp->Init();
+  db->ring_buffer_pool = rbp;
+#endif
+
   // client->Put(10, 10);
   // client->Put(1, 1);
+  
   // client->Put(5, 5);
 
   // uint64_t val_read;

@@ -42,6 +42,9 @@
 #include "listdb/util/reporter_client.h"
 
 // #include "listdb/core/delegation.h"
+#ifdef RING_DELEGATE
+#include "listdb/core/simple_ring.h"
+#endif
 class DelegatePool;
 
 #define L0_COMPACTION_ON_IDLE
@@ -248,6 +251,9 @@ class ListDB {
   // DG
 public: 
   DelegatePool* delegate_pool = nullptr;
+#ifdef RING_DELEGATE
+  RingBufferPool* ring_buffer_pool = nullptr;
+#endif
 };
 
 
