@@ -32,7 +32,7 @@ void Consumer() {
   while(!stop) {
     t = ring_pool->ReceiveRequest(rb);
     if(t == nullptr) continue;
-    printf("task region %d type %d key %ld value %ld\n", t->region, t->type, t->key, t->value);
+    // printf("task region %d type %d key %ld value %ld\n", t->region, t->type, t->key, t->value);
     cnt++;
     delete t;
   }
@@ -44,9 +44,11 @@ int main() {
 
   RingBuffer* rb = ring_pool->GetRingBuffer(0,0);
 
-  std::thread t1(Producer);
+  for(int i = 0; i < 20; i++) {
+    std::thread t(Producer);
+    t.join();
+  }
   std::thread t2(Consumer);
-  t1.join();
   t2.join();
 
   // ring_pool->Close();

@@ -13,13 +13,13 @@
 #include <syscall.h>
 #include "listdb/common.h"
 
-static const int kDelegateQueueDepth = 4096;
-static const int kDelegateNumWorkers = 40;
+static const int kDelegateQueueDepth = 8192;
+static const int kDelegateNumWorkers = 15;
 
 
 
 
-
+ 
 #endif
 
 

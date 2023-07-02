@@ -11,18 +11,17 @@ class DelegatePool;
 int main() {
   ListDB* db = new ListDB();
   db->Init();
-#ifdef MUTEX_DELEGATE
-  DelegatePool* dp = new DelegatePool();
-  dp->Init();
-  db->delegate_pool = dp;
-#endif
-  DBClient* client = new DBClient(db, 0, 1);
-
 #ifdef RING_DELEGATE
   RingBufferPool* rbp = new RingBufferPool();
   rbp->Init();
   db->ring_buffer_pool = rbp;
 #endif
+  DelegatePool* dp = new DelegatePool();
+  dp->db_ = db;
+  dp->Init();
+  db->delegate_pool = dp;
+
+  DBClient* client = new DBClient(db, 0, 1);
 
   client->Put(10, 10);
   client->Put(1, 1);
@@ -55,12 +54,7 @@ int main() {
   }
 #endif
 
-#ifdef MUTEX_DELEGATE
   dp->Close();
-#endif
-#ifdef RING_DELEGATE
-  rbp->Close();
-#endif
   db->Close();
   return 0;
 }

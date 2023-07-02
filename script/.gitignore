@@ -1,3 +1,1 @@
-*/*.folded
-*/*.perf
-*/*.data
+perf_pm/*.*

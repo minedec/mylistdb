@@ -11,9 +11,7 @@
 #include "listdb/util.h"
 #include "listdb/util/random.h"
 
-// #ifdef MUTEX_DELEGATE
-  #include "listdb/core/delegation.h"
-// #endif
+#include "listdb/core/delegation.h"
 #ifdef RING_DELEGATE
   #include "listdb/core/simple_ring.h"
 #endif
@@ -44,6 +42,9 @@ struct DelegateWorkerData {
   int region;
   int index;
   bool stop;
+
+  uint64_t start_;
+  uint64_t finish_;
   
   std::mutex mu;
   std::condition_variable cv;
@@ -52,7 +53,7 @@ struct DelegateWorkerData {
   std::queue<Task*> q;
 #endif 
 #ifdef RING_DELEGATE
-  RingBuffer* ring;
+  struct RingBuffer* ring = nullptr;
 #endif
 };
 
@@ -74,9 +75,10 @@ public:
   
 public:
   ListDB* db_;
+  DelegateWorkerData worker_data_[kNumRegions][kDelegateNumWorkers];
 
 private:
-  DelegateWorkerData worker_data_[kNumRegions][kDelegateNumWorkers];
+  
   std::thread worker_thread_[kNumRegions][kDelegateNumWorkers];
   int tasks_assigned_num[kNumRegions][kDelegateNumWorkers];
   std::deque<Task*> worker_requests_;
@@ -123,6 +125,7 @@ class DBClient {
   size_t search_visit_cnt() { return search_visit_cnt_; }
   size_t height_visit_cnt(int h) { return height_visit_cnt_[h]; }
   
+  int RandomPick();
 
  private:
   int DramRandomHeight();
@@ -203,6 +206,10 @@ void DBClient::SetRegion(int region) {
 
 int DBClient::GetRegion() {
   return region_;
+}
+
+inline int DBClient::RandomPick() {
+  return rnd_.Next() % kDelegateNumWorkers;
 }
 
 void DBClient::Put(const Key& key, const Value& value) {
@@ -432,10 +439,17 @@ void DBClient::PutStringKV(const std::string_view& key_sv, const std::string_vie
   t->string_value = value;
   t->client = this;
   t->region = region_;
+#ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
+#endif
+#ifdef RING_DELEGATE
+  int index = RandomPick();
+  rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t);
+#endif
 }
 
 void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string_view& value) {
+  uint64_t start_ = Clock::NowMicros();
   Key& key = *((Key*) key_sv.data());
   //if (!key.Valid()) {
   //  fprintf(stdout, "key is not valid: %s, %zu, key_num=%zu\n", std::string(key_sv).c_str(), *((uint64_t*) key.data()), key.key_num());
@@ -445,7 +459,9 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   uint64_t pmem_height = PmemRandomHeight();
   size_t iul_entry_size = sizeof(PmemNode) + (pmem_height - 1) * sizeof(uint64_t);
   //size_t kv_size = key.size() + value.size();
+  clock_t a,b,c,d,e;
 
+  a = clock();
   // Write value
   size_t value_alloc_size = util::AlignedSize(8, 8 + value.size());
   auto value_paddr = value_blob_[s]->Allocate(value_alloc_size);
@@ -459,6 +475,7 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   auto mem = db_->GetWritableMemTable(mem_node_size, s);
   uint64_t l0_id = mem->l0_id();
 
+  b = clock();
   // Write log
   auto log_paddr = log_[s]->Allocate(iul_entry_size);
   PmemNode* iul_entry = (PmemNode*) log_paddr.get();
@@ -470,6 +487,7 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   clwb(iul_entry, key.size());
   //clwb(iul_entry, sizeof(PmemNode) - sizeof(uint64_t));
 
+  c = clock();
   // Create skiplist node
   MemNode* node = (MemNode*) malloc(mem_node_size);
   node->key = key;
@@ -481,6 +499,13 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   auto skiplist = mem->skiplist();
   skiplist->Insert(node);
   mem->w_UnRef();
+
+  d = clock();
+  printf("write value time: %f\n", (double)(b-a)/CLOCKS_PER_SEC);
+  printf("write log time: %f\n", (double)(c-b)/CLOCKS_PER_SEC);
+  printf("write skiplist time: %f\n", (double)(d-c)/CLOCKS_PER_SEC);
+  uint64_t finish_ = Clock::NowMicros();
+  printf("run on cpu%d putstringkv %ld\n", sched_getcpu(), (finish_ - start_));
 }
 
 bool DBClient::GetStringKV(const std::string_view& key_sv, Value* value_out) {
@@ -491,7 +516,13 @@ bool DBClient::GetStringKV(const std::string_view& key_sv, Value* value_out) {
   t->region = region_;
   t->pvalue = value_out;
   t->promise = new std::promise<Value*>();
+#ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
+#endif
+#ifdef RING_DELEGATE
+  int index = RandomPick();
+  rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t);
+#endif
   value_out = t->promise->get_future().get();
   delete t;
   return true;
@@ -857,6 +888,14 @@ void DelegatePool::Close() {
     }
   }
 #endif
+#ifdef RING_DELEGATE
+  for(int i = 0; i < kNumRegions; i++) {
+      for(int j = 0; j < kDelegateNumWorkers; j++) {
+        worker_data_[i][j].stop = true;
+      }
+  }
+  db_->ring_buffer_pool->Close();
+#endif
   printf("delegate finish %d tasks\n", finish_cnt.load(std::memory_order_relaxed));
 }
 
@@ -871,6 +910,7 @@ void DelegatePool::Init() {
       worker_data_[i][j].region = i;
       worker_data_[i][j].index = j;
       worker_data_[i][j].stop = false;
+      worker_data_[i][j].start_ = Clock::NowMicros();
 #ifdef RING_DELEGATE
       worker_data_[i][j].ring = &db_->ring_buffer_pool->ring_buffer_pool[i][j];
 #endif
@@ -881,9 +921,7 @@ void DelegatePool::Init() {
   printf("init delegatepool, region nums %d, per region workers %d\n", kNumRegions, kDelegateNumWorkers);
 }
 
-int inline RandomPick() {
-  return random() % kDelegateNumWorkers;
-}
+
 
 void DelegatePool::AddTask(Task* task) {
   std::unique_lock<std::mutex> lk(task_mu_);
@@ -893,9 +931,9 @@ void DelegatePool::AddTask(Task* task) {
 }
 
 void DelegatePool::BackgroundMainLoop() {
-
-  while(true) {
 #ifdef MUTEX_DELEGATE
+  while(true) {
+
     std::deque<Task*> new_work_requests;
     std::unique_lock<std::mutex> lk(task_mu_);
     task_cv_.wait(lk, [&] {return !worker_requests_.empty() || stop_;});
@@ -924,8 +962,9 @@ void DelegatePool::BackgroundMainLoop() {
       available_worker->cv.notify_one();
       lk.unlock();
     }
-#endif
+
   }
+#endif
 }
 
 void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
@@ -948,7 +987,8 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
     lk.unlock();
 #endif
 #ifdef RING_DELEGATE
-
+    Task* task = db_->ring_buffer_pool->ReceiveRequest(data->ring);
+    if(task == nullptr) continue;
 #endif
     switch(task->type) {
       case 0:
@@ -960,22 +1000,40 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
         task->promise->set_value(task->pvalue);
         break;
 #if defined(LISTDB_STRING_KEY) && defined(LISTDB_WISCKEY)
-      case 2:
+      case 2: {
+        uint64_t start_ = Clock::NowMicros();
         task->client->PutStringKVHook(task->string_key, task->string_value);
+        uint64_t finish_ = Clock::NowMicros();
+        printf("worker %d run on cpu%d putstringkv %ld\n", data->id, sched_getcpu(), (finish_ - start_));
         delete task;
         break;
+      }
       case 3:
         task->client->GetStringKVHook(task->string_key, task->pvalue);
         task->promise->set_value(task->pvalue);
         break;
 #endif
     }
-    tasks_assigned_num[data->region][data->index]--;
+    // tasks_assigned_num[data->region][data->index]--;
 #ifdef MUTEX_DELEGATE
     available_cnt++;
 #endif
+#ifdef RING_DELEGATE
+    // printf("before judge worker %d stop %d sendcnt %d recvcnt %d finishcnt %d\n", data->id, data->stop, 
+    //                                   data->ring->sendcnt.load(std::memory_order_relaxed),
+    //                                   data->ring->recvcnt.load(std::memory_order_relaxed),
+    //                                   finish_cnt.load(std::memory_order_relaxed));
+    if(data->stop && data->ring->recvcnt.load(std::memory_order_relaxed) == data->ring->sendcnt.load(std::memory_order_relaxed)) {
+    //   // printf("worker %d run on cpu%d about to quit\n", data->id, sched_getcpu());
+      data->finish_ = Clock::NowMicros();
+      pthread_barrier_wait(data->ring->barrier);
+    //   // printf("worker %d run on cpu%d quit\n", data->id, sched_getcpu());
+      break;
+    }
+#endif
     finish_cnt++;
   }
+  // printf("worker %d run on cpu%d func finish\n", data->id, sched_getcpu());
 }
 
 #endif  // LISTDB_DB_CLIENT_H_

@@ -1,6 +1,7 @@
 cd perf_pm
 
-perf record -e cpu-clock -F 60 -g --call-graph=dwarf ./../../build/db_bench --benchmarks="fillseq" --threads=60 --num=10000
+# perf record -e cpu-clock -F 60 -g --call-graph=dwarf ./../../build/db_bench --benchmarks="fillseq" --threads=60 --num=10000
+perf record -e cpu-clock -F 60 -g --call-graph=dwarf numactl -N 1 ./../../build/db_bench --benchmarks="fillseq" --num=200000 --threads=40 --value_size=1024
 mv perf.data perf_pm_fillseq.data
 # perf record -e cpu-clock -F 60 -g ./../../build/db_bench --benchmarks="fillrandom" --db="/mnt/pmem0/dbtest"
 # mv perf.data perf_pm_fillrandom.data

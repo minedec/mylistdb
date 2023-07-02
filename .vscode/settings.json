@@ -53,16 +53,17 @@
     "stop_token": "cpp",
     "streambuf": "cpp",
     "shared_mutex": "cpp",
-    "ctime": "cpp",
-    "bit": "cpp",
-    "chrono": "cpp",
-    "deque": "cpp",
-    "ratio": "cpp",
-    "system_error": "cpp",
-    "iostream": "cpp",
-    "mutex": "cpp",
-    "stop_token": "cpp",
-    "streambuf": "cpp"
+    "clocale": "cpp",
+    "cstdarg": "cpp",
+    "cwctype": "cpp",
+    "codecvt": "cpp",
+    "map": "cpp",
+    "fstream": "cpp",
+    "iomanip": "cpp",
+    "optional": "cpp",
+    "typeindex": "cpp",
+    "hash_map": "cpp",
+    "hash_set": "cpp"
   },
   "cmake.configureOnOpen": false
 }

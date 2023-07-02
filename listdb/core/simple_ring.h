@@ -2,15 +2,16 @@
 #define SIMPLE_RING_H_
 
 // #include <spinglock.h>
-#include "listdb/db_client.h"
+// #include "listdb/db_client.h"
 #include "listdb/common.h"
 #include "listdb/core/delegation.h"
 #include <pthread.h>
 
-static const int RING_BUFFER_SIZE = 1024 * 4;
+static const int RING_BUFFER_SIZE = 1024 * 1024 * 4;
+struct Task;
 
 struct ring_entry {
-  Task* task;
+  struct Task* task;
   bool valid;
 };
 
@@ -21,6 +22,11 @@ struct RingBuffer {
   int head_idx = 0;
   int num_of_entry = RING_BUFFER_SIZE;
   int entry_size;
+  int index;
+  bool stop = false;
+  pthread_barrier_t *barrier;
+  std::atomic<int> sendcnt = {0};
+  std::atomic<int> recvcnt = {0};
 };
 
 
@@ -30,6 +36,8 @@ public:
   
   void Close();
 
+  void Wait();
+
   bool SendRequest(RingBuffer* ring, Task* task);
 
   Task* ReceiveRequest(RingBuffer* ring);
@@ -38,6 +46,7 @@ public:
 
 public:
   RingBuffer ring_buffer_pool[kNumRegions][kDelegateNumWorkers];
+  pthread_barrier_t barrier;
 };
 
 RingBuffer* RingBufferPool::GetRingBuffer(int region, int index) {
@@ -45,17 +54,35 @@ RingBuffer* RingBufferPool::GetRingBuffer(int region, int index) {
 }
 
 void RingBufferPool::Init() {
+  pthread_barrier_init(&barrier, NULL, kNumRegions * kDelegateNumWorkers + 1);
   for(int i = 0; i < kNumRegions; i++) {
     for(int j = 0; j < kDelegateNumWorkers; j++) {
        pthread_spin_init(&ring_buffer_pool[i][j].spinlock, PTHREAD_PROCESS_PRIVATE);
+       ring_buffer_pool[i][j].index = i * kDelegateNumWorkers + j;
+       ring_buffer_pool[i][j].barrier = &barrier;
     }
   }
+  printf("init ring buffer pool, region nums %d, per region rings %d\n", kNumRegions, kDelegateNumWorkers);
+}
+
+void RingBufferPool::Wait() {
+  // for(int i = 0; i < kNumRegions; i++) {
+  //   for(int j = 0; j < kDelegateNumWorkers; j++) {
+  //     while(ring_buffer_pool[i][j].recvcnt.load(std::memory_order_relaxed) != ring_buffer_pool[i][j].sendcnt.load(std::memory_order_relaxed));
+  //   }
+  // }
+  pthread_barrier_wait(&barrier);
+  printf("wait end\n");
 }
 
 void RingBufferPool::Close() {
+  Wait();
   for(int i = 0; i < kNumRegions; i++) {
     for(int j = 0; j < kDelegateNumWorkers; j++) {
-       pthread_spin_destroy(&ring_buffer_pool[i][j].spinlock);
+      pthread_spin_destroy(&ring_buffer_pool[i][j].spinlock);
+      printf("ringbuffer %d send %d req recv %d req\n", ring_buffer_pool[i][j].index, 
+                                                        ring_buffer_pool[i][j].sendcnt.load(std::memory_order::memory_order_relaxed),
+                                                        ring_buffer_pool[i][j].recvcnt.load(std::memory_order::memory_order_relaxed));
     }
   }
 }
@@ -76,6 +103,8 @@ bool RingBufferPool::SendRequest(RingBuffer* ring, Task* t) {
 
   pthread_spin_unlock(&ring->spinlock);
 
+  ring->sendcnt++;
+
   return true;
 }
 
@@ -93,6 +122,9 @@ Task* RingBufferPool::ReceiveRequest(RingBuffer* ring) {
 
   ring->head_idx = (ring->head_idx + 1) % ring->num_of_entry;
   pthread_spin_unlock(&ring->spinlock);
+
+  ring->recvcnt++;
+
   return ret;
 }
 #endif

@@ -27,6 +27,8 @@ int main() {
 
 #include <gflags/gflags.h>
 
+#include <sched.h>
+
 #include "listdb/db_client.h"
 #include "listdb/env.h"
 #include "listdb/listdb.h"
@@ -36,6 +38,7 @@ int main() {
 #include "listdb/util/clock.h"
 #include "listdb/util/random.h"
 #include "listdb/util/rate_limiter.h"
+#include "listdb/common.h"
 
 #include "listdb/core/delegation.h"
 
@@ -499,7 +502,7 @@ static std::unordered_map<OperationType, std::string, std::hash<unsigned char>>
 
 class CombinedStats;
 class Stats {
- private:
+ public:
   int id_;
   uint64_t start_ = 0;
   uint64_t sine_interval_;
@@ -710,6 +713,7 @@ class Stats {
     if (bytes_ > 0) {
       // Rate is computed on actual elapsed time, not the sum of per-thread
       // elapsed times.
+      printf("states report finish_ %ld\n", finish_);
       double elapsed = (finish_ - start_) * 1e-6;
       char rate[100];
       snprintf(rate, sizeof(rate), "%6.1f MB/s",
@@ -889,7 +893,13 @@ class Benchmark {
         writes_(FLAGS_writes < 0 ? FLAGS_num : FLAGS_writes) {
     if (!FLAGS_use_existing_db) {
       db_->Init();
+#ifdef RING_DELEGATE
+      RingBufferPool* rbp = new RingBufferPool();
+      rbp->Init();
+      db_->ring_buffer_pool = rbp;
+#endif
       dp_ = new DelegatePool();
+      dp_->db_ = db_;
       dp_->Init();
       db_->delegate_pool = dp_;
     } else {
@@ -904,7 +914,7 @@ class Benchmark {
   }
 
   ~Benchmark() {
-    dp_->Close();
+    // dp_->Close();
     db_->Close();
   }
 
@@ -1375,12 +1385,29 @@ class Benchmark {
       RecoveryAfterMixGraph();
     }
 
+    uint64_t now = Clock::NowMicros();
+    printf("before ring buffer wait, time %ld\n", now);
+    printf("db_bench runs on cpu %d\n", sched_getcpu());
+#ifdef RING_DELEGATE
+    // db_->ring_buffer_pool->Wait();
+    dp_->Close();
+#endif
+    now = Clock::NowMicros();
+    printf("after ring buffer wait, time %ld\n", now);
 
     // Stats for some threads can be excluded.
     Stats merge_stats;
     for (int i = 0; i < n; i++) {
       merge_stats.Merge(arg[i].thread->stats);
     }
+    // delegate recalculate seconds_
+    double seconds = 0;
+    for(int i = 0; i < kNumRegions; i++) {
+      for(int j = 0; j < kDelegateNumWorkers; j++) {
+        seconds += (dp_->worker_data_[i][j].finish_ - dp_->worker_data_[i][j].start_) * 1e-6;
+      }
+    }
+    merge_stats.seconds_ = seconds;
     merge_stats.Report(name);
 
     // Op Time Array
