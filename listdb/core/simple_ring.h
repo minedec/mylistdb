@@ -7,7 +7,7 @@
 #include "listdb/core/delegation.h"
 #include <pthread.h>
 
-static const int RING_BUFFER_SIZE = 1024 * 1024 * 4;
+static const int RING_BUFFER_SIZE = 1024 * 1024;
 struct Task;
 
 struct ring_entry {
@@ -87,6 +87,7 @@ void RingBufferPool::Close() {
   }
 }
 
+//TODO: sendrequest has bug, it can not spin wait when queue is full
 bool RingBufferPool::SendRequest(RingBuffer* ring, Task* t) {
 
   pthread_spin_lock(&ring->spinlock);

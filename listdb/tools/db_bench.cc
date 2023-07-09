@@ -713,7 +713,6 @@ class Stats {
     if (bytes_ > 0) {
       // Rate is computed on actual elapsed time, not the sum of per-thread
       // elapsed times.
-      printf("states report finish_ %ld\n", finish_);
       double elapsed = (finish_ - start_) * 1e-6;
       char rate[100];
       snprintf(rate, sizeof(rate), "%6.1f MB/s",
@@ -1133,6 +1132,7 @@ class Benchmark {
  private:
   int listdb_Put(DBClient* client, const std::string_view& key, const std::string_view& value) {
     client->PutStringKV(key, value);
+    // client->PutStringKVHook(key, value);
     return 0;
   }
 
@@ -1399,6 +1399,12 @@ class Benchmark {
     Stats merge_stats;
     for (int i = 0; i < n; i++) {
       merge_stats.Merge(arg[i].thread->stats);
+    }
+    // merge delegate thread finish time
+    for(int i = 0; i < kNumRegions; i++) {
+      for(int j = 0; j < kDelegateNumWorkers; j++) {
+        if(dp_->worker_data_[i][j].finish_ > merge_stats.finish_) merge_stats.finish_ = dp_->worker_data_[i][j].finish_;
+      }
     }
     // delegate recalculate seconds_
     double seconds = 0;

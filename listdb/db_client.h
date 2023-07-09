@@ -35,6 +35,7 @@ struct Task {
   std::promise<Value*>* promise = nullptr;
   DBClient* client = nullptr;
   int region;
+  uint64_t id;
 };
 
 struct DelegateWorkerData {
@@ -91,6 +92,7 @@ private:
 
 
 #define LEVEL_CHECK_PERIOD_FACTOR 1
+static std::atomic<uint64_t> putstringkv_time {0};
 
 //#define LOG_NTSTORE
 class DBClient {
@@ -126,6 +128,8 @@ class DBClient {
   size_t height_visit_cnt(int h) { return height_visit_cnt_[h]; }
   
   int RandomPick();
+
+  static uint64_t GetPutStringKVCost();
 
  private:
   int DramRandomHeight();
@@ -212,6 +216,10 @@ inline int DBClient::RandomPick() {
   return rnd_.Next() % kDelegateNumWorkers;
 }
 
+uint64_t DBClient::GetPutStringKVCost() {
+  return putstringkv_time.load(std::memory_order::memory_order_relaxed);
+}
+
 void DBClient::Put(const Key& key, const Value& value) {
   Task *t = new Task();
   t->type = 0; // kPut = 0
@@ -219,12 +227,15 @@ void DBClient::Put(const Key& key, const Value& value) {
   t->value = value;
   t->client = this;
   t->region = region_;
+  t->id = rnd_.Next64();
 #ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
 #endif
 #ifdef RING_DELEGATE
   int index = RandomPick();
-  rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t);
+  while(!rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t)) {
+    index = RandomPick();
+  }
 #endif
 }
 
@@ -332,7 +343,7 @@ bool DBClient::Get(const Key& key, Value* value_out) {
   t->client = this;
   t->region = region_;
   t->pvalue = value_out;
-
+  t->id = rnd_.Next64();
   t->promise = new std::promise<Value*>();
 #ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
@@ -439,12 +450,18 @@ void DBClient::PutStringKV(const std::string_view& key_sv, const std::string_vie
   t->string_value = value;
   t->client = this;
   t->region = region_;
+  t->id = rnd_.Next64();
 #ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
 #endif
 #ifdef RING_DELEGATE
+  uint64_t start_ = Clock::NowMicros();
   int index = RandomPick();
-  rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t);
+  while(!rbp_->SendRequest(rbp_->GetRingBuffer(region_, index), t)) {
+    index = RandomPick();
+  }
+  uint64_t finish_ = Clock::NowMicros();
+  // printf("client run on cpu%d send req cost %ld us task %ld\n", sched_getcpu(), finish_ - start_, t->id);
 #endif
 }
 
@@ -501,11 +518,12 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   mem->w_UnRef();
 
   d = clock();
-  printf("write value time: %f\n", (double)(b-a)/CLOCKS_PER_SEC);
-  printf("write log time: %f\n", (double)(c-b)/CLOCKS_PER_SEC);
-  printf("write skiplist time: %f\n", (double)(d-c)/CLOCKS_PER_SEC);
+  // printf("write value time: %f\n", (double)(b-a)/CLOCKS_PER_SEC);
+  // printf("write log time: %f\n", (double)(c-b)/CLOCKS_PER_SEC);
+  // printf("write skiplist time: %f\n", (double)(d-c)/CLOCKS_PER_SEC);
   uint64_t finish_ = Clock::NowMicros();
   printf("run on cpu%d putstringkv %ld\n", sched_getcpu(), (finish_ - start_));
+  putstringkv_time.fetch_add(finish_ - start_);
 }
 
 bool DBClient::GetStringKV(const std::string_view& key_sv, Value* value_out) {
@@ -515,6 +533,7 @@ bool DBClient::GetStringKV(const std::string_view& key_sv, Value* value_out) {
   t->client = this;
   t->region = region_;
   t->pvalue = value_out;
+  t->id = rnd_.Next64();
   t->promise = new std::promise<Value*>();
 #ifdef MUTEX_DELEGATE
   dp_->AddTask(t);
@@ -698,7 +717,7 @@ PmemPtr DBClient::LevelLookup(const Key& key, const int region, const int level,
   while (true) {
     curr_paddr_dump = pred->next[0];
     curr = (Node*) ((PmemPtr*) &curr_paddr_dump)->get();
-    if (curr) {
+    if (curr) { 
       if (rnd_.Next() % LEVEL_CHECK_PERIOD_FACTOR == 0) {
         int curr_level = (curr->tag & 0xf00) >> 8;
         if (curr_level > level) {
@@ -987,8 +1006,12 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
     lk.unlock();
 #endif
 #ifdef RING_DELEGATE
+    uint64_t start_ = Clock::NowMicros();
     Task* task = db_->ring_buffer_pool->ReceiveRequest(data->ring);
+    uint64_t finish_ = Clock::NowMicros();
     if(task == nullptr) continue;
+    // printf("worker %d run on cpu%d recv req cost %ld us task %ld\n", data->id, sched_getcpu(), (finish_ - start_), task->id);  
+
 #endif
     switch(task->type) {
       case 0:
@@ -1004,7 +1027,7 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
         uint64_t start_ = Clock::NowMicros();
         task->client->PutStringKVHook(task->string_key, task->string_value);
         uint64_t finish_ = Clock::NowMicros();
-        printf("worker %d run on cpu%d putstringkv %ld\n", data->id, sched_getcpu(), (finish_ - start_));
+        // printf("worker %d run on cpu%d putstringkv %ld task %ld\n", data->id, sched_getcpu(), (finish_ - start_), task->id);
         delete task;
         break;
       }
@@ -1018,20 +1041,20 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
 #ifdef MUTEX_DELEGATE
     available_cnt++;
 #endif
+    finish_cnt++;
 #ifdef RING_DELEGATE
     // printf("before judge worker %d stop %d sendcnt %d recvcnt %d finishcnt %d\n", data->id, data->stop, 
     //                                   data->ring->sendcnt.load(std::memory_order_relaxed),
     //                                   data->ring->recvcnt.load(std::memory_order_relaxed),
     //                                   finish_cnt.load(std::memory_order_relaxed));
     if(data->stop && data->ring->recvcnt.load(std::memory_order_relaxed) == data->ring->sendcnt.load(std::memory_order_relaxed)) {
-    //   // printf("worker %d run on cpu%d about to quit\n", data->id, sched_getcpu());
+      // printf("worker %d run on cpu%d about to quit\n", data->id, sched_getcpu());
       data->finish_ = Clock::NowMicros();
       pthread_barrier_wait(data->ring->barrier);
-    //   // printf("worker %d run on cpu%d quit\n", data->id, sched_getcpu());
+      // printf("worker %d run on cpu%d quit\n", data->id, sched_getcpu());
       break;
     }
 #endif
-    finish_cnt++;
   }
   // printf("worker %d run on cpu%d func finish\n", data->id, sched_getcpu());
 }

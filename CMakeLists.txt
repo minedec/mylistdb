@@ -121,6 +121,7 @@ set(test_srcs
   listdb/lib/numa_test.cc
   listdb/core/skiplist_cache_test.cc
   listdb/db_client_test.cc
+  listdb/ubench/delegate_remote_test.cc
   listdb/core/delegate_test.cc
   listdb/core/simple_ring_test.cc
   )

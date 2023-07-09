@@ -14,7 +14,7 @@
 #include "listdb/common.h"
 
 static const int kDelegateQueueDepth = 8192;
-static const int kDelegateNumWorkers = 15;
+static const int kDelegateNumWorkers = 10;
 
 
 
