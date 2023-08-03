@@ -476,9 +476,9 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   uint64_t pmem_height = PmemRandomHeight();
   size_t iul_entry_size = sizeof(PmemNode) + (pmem_height - 1) * sizeof(uint64_t);
   //size_t kv_size = key.size() + value.size();
-  clock_t a,b,c,d,e;
+  // clock_t a,b,c,d,e;
 
-  a = clock();
+  // a = clock();
   // Write value
   size_t value_alloc_size = util::AlignedSize(8, 8 + value.size());
   auto value_paddr = value_blob_[s]->Allocate(value_alloc_size);
@@ -492,7 +492,7 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   auto mem = db_->GetWritableMemTable(mem_node_size, s);
   uint64_t l0_id = mem->l0_id();
 
-  b = clock();
+  // b = clock();
   // Write log
   auto log_paddr = log_[s]->Allocate(iul_entry_size);
   PmemNode* iul_entry = (PmemNode*) log_paddr.get();
@@ -504,7 +504,7 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   clwb(iul_entry, key.size());
   //clwb(iul_entry, sizeof(PmemNode) - sizeof(uint64_t));
 
-  c = clock();
+  // c = clock();
   // Create skiplist node
   MemNode* node = (MemNode*) malloc(mem_node_size);
   node->key = key;
@@ -517,7 +517,7 @@ void DBClient::PutStringKVHook(const std::string_view& key_sv, const std::string
   skiplist->Insert(node);
   mem->w_UnRef();
 
-  d = clock();
+  // d = clock();
   // printf("write value time: %f\n", (double)(b-a)/CLOCKS_PER_SEC);
   // printf("write log time: %f\n", (double)(c-b)/CLOCKS_PER_SEC);
   // printf("write skiplist time: %f\n", (double)(d-c)/CLOCKS_PER_SEC);
@@ -1008,6 +1008,7 @@ void DelegatePool::BackgroundDelegateLoop(DelegateWorkerData* data) {
 #ifdef RING_DELEGATE
     uint64_t start_ = Clock::NowMicros();
     Task* task = db_->ring_buffer_pool->ReceiveRequest(data->ring);
+    for(int i = 0; i < 5000; i++){};
     uint64_t finish_ = Clock::NowMicros();
     if(task == nullptr) continue;
     // printf("worker %d run on cpu%d recv req cost %ld us task %ld\n", data->id, sched_getcpu(), (finish_ - start_), task->id);  

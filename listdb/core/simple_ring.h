@@ -87,7 +87,7 @@ void RingBufferPool::Close() {
   }
 }
 
-//TODO: sendrequest has bug, it can not spin wait when queue is full
+//TODO: sendrequest has bug, it can not spin wait when queue is full:(fixed)
 bool RingBufferPool::SendRequest(RingBuffer* ring, Task* t) {
 
   pthread_spin_lock(&ring->spinlock);

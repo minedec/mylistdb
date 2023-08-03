@@ -729,6 +729,8 @@ class Stats {
             (long)throughput,
             (extra.empty() ? "" : " "),
             extra.c_str());
+    fprintf(stdout, "total bytes %ld\n", bytes_);
+    fprintf(stdout, "total time %ld\n", finish_ - start_);
     if (FLAGS_histogram) {
       for (auto it = hist_.begin(); it != hist_.end(); ++it) {
         fprintf(stdout, "Microseconds per %s:\n%s\n",
@@ -892,15 +894,15 @@ class Benchmark {
         writes_(FLAGS_writes < 0 ? FLAGS_num : FLAGS_writes) {
     if (!FLAGS_use_existing_db) {
       db_->Init();
-#ifdef RING_DELEGATE
-      RingBufferPool* rbp = new RingBufferPool();
-      rbp->Init();
-      db_->ring_buffer_pool = rbp;
-#endif
-      dp_ = new DelegatePool();
-      dp_->db_ = db_;
-      dp_->Init();
-      db_->delegate_pool = dp_;
+// #ifdef RING_DELEGATE
+//       RingBufferPool* rbp = new RingBufferPool();
+//       rbp->Init();
+//       db_->ring_buffer_pool = rbp;
+// #endif
+//       dp_ = new DelegatePool();
+//       dp_->db_ = db_;
+//       dp_->Init();
+//       db_->delegate_pool = dp_;
     } else {
       abort();
       //db_->Open();
@@ -1109,6 +1111,7 @@ class Benchmark {
 
         CombinedStats combined_stats;
         for (int i = 0; i < num_repeat; i++) {
+          printf("running repeat %d times\n", i);
           Stats stats = RunBenchmark(num_threads, name, method);
           combined_stats.AddStats(stats);
         }
@@ -1131,8 +1134,8 @@ class Benchmark {
 
  private:
   int listdb_Put(DBClient* client, const std::string_view& key, const std::string_view& value) {
-    client->PutStringKV(key, value);
-    // client->PutStringKVHook(key, value);
+    // client->PutStringKV(key, value);
+    client->PutStringKVHook(key, value);
     return 0;
   }
 
@@ -1390,7 +1393,7 @@ class Benchmark {
     printf("db_bench runs on cpu %d\n", sched_getcpu());
 #ifdef RING_DELEGATE
     // db_->ring_buffer_pool->Wait();
-    dp_->Close();
+    // dp_->Close();
 #endif
     now = Clock::NowMicros();
     printf("after ring buffer wait, time %ld\n", now);
@@ -1398,22 +1401,23 @@ class Benchmark {
     // Stats for some threads can be excluded.
     Stats merge_stats;
     for (int i = 0; i < n; i++) {
+      printf("thread elapse %ld\n", arg[i].thread->stats.finish_ - arg[i].thread->stats.start_);
       merge_stats.Merge(arg[i].thread->stats);
     }
-    // merge delegate thread finish time
-    for(int i = 0; i < kNumRegions; i++) {
-      for(int j = 0; j < kDelegateNumWorkers; j++) {
-        if(dp_->worker_data_[i][j].finish_ > merge_stats.finish_) merge_stats.finish_ = dp_->worker_data_[i][j].finish_;
-      }
-    }
-    // delegate recalculate seconds_
-    double seconds = 0;
-    for(int i = 0; i < kNumRegions; i++) {
-      for(int j = 0; j < kDelegateNumWorkers; j++) {
-        seconds += (dp_->worker_data_[i][j].finish_ - dp_->worker_data_[i][j].start_) * 1e-6;
-      }
-    }
-    merge_stats.seconds_ = seconds;
+    // // merge delegate thread finish time
+    // for(int i = 0; i < kNumRegions; i++) {
+    //   for(int j = 0; j < kDelegateNumWorkers; j++) {
+    //     if(dp_->worker_data_[i][j].finish_ > merge_stats.finish_) merge_stats.finish_ = dp_->worker_data_[i][j].finish_;
+    //   }
+    // }
+    // // delegate recalculate seconds_
+    // double seconds = 0;
+    // for(int i = 0; i < kNumRegions; i++) {
+    //   for(int j = 0; j < kDelegateNumWorkers; j++) {
+    //     seconds += (dp_->worker_data_[i][j].finish_ - dp_->worker_data_[i][j].start_) * 1e-6;
+    //   }
+    // }
+    // merge_stats.seconds_ = seconds;
     merge_stats.Report(name);
 
     // Op Time Array
@@ -1564,6 +1568,8 @@ class Benchmark {
 
     int64_t stage = 0;
     int64_t num_written = 0;
+    uint64_t start = 0;
+    uint64_t finish = 0;
     while ((num_per_key_gen != 0) && !duration.Done(entries_per_batch_)) {
       if (duration.GetStage() != stage) {
         stage = duration.GetStage();
@@ -1599,7 +1605,10 @@ class Benchmark {
         // once per write.
         thread->stats.ResetLastOpTime();
       }
+      finish = Clock::NowMicros();
+      printf("before pre op gap %ld\n", finish - start);
       s = listdb_Put(thread->client, key, val);
+      start = Clock::NowMicros();
       thread->stats.FinishedOps(nullptr, entries_per_batch_, kWrite);
       if (s != 0/*!s.ok()*/) {
         fprintf(stderr, "put error\n");
