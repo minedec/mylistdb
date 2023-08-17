@@ -969,8 +969,12 @@ void ListDB::SetL0CompactionSchedulerStatus(const ServiceStatus& status) {
 }
 
 void ListDB::BackgroundThreadLoop() {
-#if 0
-  numa_run_on_node(0);
+#if 1
+  // numa_run_on_node(0);
+  // cpu_set_t mask;
+  // CPU_ZERO(&mask);
+  // CPU_SET(12, &mask);
+  // sched_setaffinity(0, sizeof(mask), &mask);
 #endif
   static const int kWorkerQueueDepth = 2;
   std::vector<int> num_assigned_tasks(kNumWorkers);
@@ -1115,6 +1119,18 @@ void ListDB::BackgroundThreadLoop() {
 
 void ListDB::CompactionWorkerThreadLoop(CompactionWorkerData* td) {
   td->rnd.Reset((td->id + 1) * (td->id + 1));
+
+  // struct bitmask *mask = numa_bitmask_alloc(numa_num_possible_nodes());
+  // numa_bitmask_setbit(mask, 0);
+  // numa_bind(mask);
+  // numa_bitmask_free(mask);
+  // numa_run_on_node(0);
+
+  // cpu_set_t mask;
+  // CPU_ZERO(&mask);
+  // CPU_SET(td->id * 2 + 14, &mask);
+  // sched_setaffinity(0, sizeof(mask), &mask);
+
   while (true) {
     std::unique_lock<std::mutex> lk(td->mu);
     td->cv.wait(lk, [&]{ return td->stop || !td->q.empty(); });

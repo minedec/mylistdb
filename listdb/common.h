@@ -70,7 +70,7 @@ constexpr int kNumDramLevels = 1;
 constexpr int kNumPmemLevels = 1;
 constexpr int kNumLevels = kNumDramLevels + kNumPmemLevels;
 
-constexpr int kNumWorkers = 5;
+constexpr int kNumWorkers = 10;
 
 constexpr size_t kPmemLogBlockSize = 4 * (1ull<<20) / kNumShards;
 constexpr size_t kPmemBlobBlockSize = kPmemLogBlockSize;

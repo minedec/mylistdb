@@ -6,16 +6,21 @@
 #include "listdb/core/delegation.h"
 #include "listdb/core/simple_ring.h"
 #include "listdb/util/random.h"
+#include "listdb/port/port_posix.h"
+
+class ThreadState;
 
 ListDB* db_;
 DelegatePool* dp_;
 static std::vector<long> keys;
 static std::vector<long> values;
 
-int client_num = 10;
-int keynum = 20000;
+int client_num = 20;
+int keynum = 500000;
 int key_size = 16;
 int value_size = 1024;
+void (*local_test)(ThreadState*);
+void (*delegate_test)(ThreadState*);
 
 std::atomic<uint64_t> bytes  {0};
 std::atomic<uint64_t> elapse {0};
@@ -60,7 +65,7 @@ struct ThreadState {
   Stats stats;
   SharedState* shared;
   DBClient* client;
-
+  void (*method)(ThreadState*);
   explicit ThreadState(int index) : tid(index), rand(1000 + index) {}
 };
 
@@ -162,13 +167,27 @@ int GetCh() {
   return chip;
 }
 
+int64_t GetRandomKey(Random64* rand, int& keynum) {
+  uint64_t rand_int = rand->Next();
+  int64_t key_rand;
+  key_rand = (rand_int % (keynum - 1)) + 1;
+  
+  return key_rand;
+}
+
 void GenerateKeyFromInt(uint64_t v, std::string_view* key) {
     if (v == 0) v++;
     char* start = const_cast<char*>(key->data());
     char* pos = start;
 
     int bytes_to_fill = std::min(key_size - static_cast<int>(pos - start), 8);
-    memcpy(pos, static_cast<void*>(&v), bytes_to_fill);
+    if(port::kLittleEndian) {
+      for (int i = 0; i < bytes_to_fill; ++i) {
+        pos[i] = (v >> ((bytes_to_fill - i - 1) << 3)) & 0xFF;
+      }
+    } else {
+      memcpy(pos, static_cast<void*>(&v), bytes_to_fill);
+    }
     pos += bytes_to_fill;
     if (key_size > pos - start) {
       memset(pos, '0', key_size - (pos - start));
@@ -188,7 +207,7 @@ void GenerateValFromInt(uint64_t v, std::string_view* val) {
     }
 }
 
-void delegate_func(ThreadState* thread_state) {
+void delegate_put_func(ThreadState* thread_state) {
   int keynum = thread_state->shared->keynum;
   DBClient* client = thread_state->client;
   std::unique_ptr<const char[]> key_guard;
@@ -199,8 +218,8 @@ void delegate_func(ThreadState* thread_state) {
 
   for(int i = 0; i < keynum; i++) {
     std::string_view val;
-    int randnum = keygen.Next();
-    GenerateKeyFromInt(keys[i], &key);
+    uint64_t randnum = keygen.Next();
+    GenerateKeyFromInt(randnum, &key);
     val = gen.Generate(value_size);
     total_byte += (key_size + val.size());
     client->PutStringKV(key, val);
@@ -208,31 +227,110 @@ void delegate_func(ThreadState* thread_state) {
   bytes.fetch_add(total_byte);
 }
 
-void local_func(ThreadState* thread_state) {
+void delegate_get_func(ThreadState* thread_state) {
+  int64_t read = 0;
+  int64_t found = 0;
+  int64_t key_rand = 0;
+
+  int keynum = thread_state->shared->keynum;
+  DBClient* client = thread_state->client;
+
+  std::unique_ptr<const char[]> key_guard;
+  std::string_view key = AllocateKey(&key_guard);
+  std::string val;
+  val.reserve(value_size);
+
+  uint64_t total_byte = 0;
+  uint64_t tstart_ = Clock::NowMicros();
+  
+  for(int i = 0; i < keynum; i++) {
+    key_rand = GetRandomKey(&thread_state->rand, keynum);
+    GenerateKeyFromInt(key_rand, &key);
+    read++;
+    int s;
+    uint64_t value_addr = 0;
+    s = client->GetStringKV(key, &value_addr);
+    if(s) {
+      char* p = (char*)value_addr;
+      size_t val_len = *((uint64_t*)p);
+      p += sizeof(size_t);
+      val.assign(p, val_len);
+      found++;
+      total_byte += (key_size + val.size());
+    }
+  }
+
+  uint64_t tfinish_ = Clock::NowMicros();
+  printf("thread elapse %ld\n", tfinish_ - tstart_);
+  bytes.fetch_add(total_byte);
+  elapse.fetch_add(tfinish_ - tstart_);
+  printf("%lu of %lu found\n", found, keynum);
+}
+
+void local_put_func(ThreadState* thread_state) {
   int keynum = thread_state->shared->keynum;
   DBClient* client = thread_state->client;
   std::unique_ptr<const char[]> key_guard;
   std::string_view key = AllocateKey(&key_guard);
   uint64_t total_byte = 0;
-  uint64_t tstart_ = Clock::NowMicros();
   RandomGenerator gen;
-  KeyGenerator keygen(&(thread_state->rand), WriteMode::RANDOM, keynum);
-  uint64_t start = 0;
-  uint64_t finish = 0;
+  KeyGenerator keygen(&(thread_state->rand), WriteMode::SEQUENTIAL, keynum);
+  uint64_t tstart_ = Clock::NowMicros();
+  
   for(int i = 0; i < keynum; i++) {
     std::string_view val;
     int randnum = keygen.Next();
     GenerateKeyFromInt(randnum, &key);
     val = gen.Generate(value_size);
     total_byte += (key_size + val.size());
-    for(int i = 0; i < 5000; i++) {}
     client->PutStringKVHook(key, val);
   }
+
+  uint64_t tfinish_ = Clock::NowMicros();
+  bytes.fetch_add(total_byte);
+  elapse.fetch_add(tfinish_ - tstart_);
+}
+
+
+
+void local_get_func(ThreadState* thread_state) {
+  int64_t read = 0;
+  int64_t found = 0;
+  int64_t key_rand = 0;
+
+  int keynum = thread_state->shared->keynum;
+  DBClient* client = thread_state->client;
+
+  std::unique_ptr<const char[]> key_guard;
+  std::string_view key = AllocateKey(&key_guard);
+  std::string val;
+  val.reserve(value_size);
+
+  uint64_t total_byte = 0;
+  uint64_t tstart_ = Clock::NowMicros();
   
+  for(int i = 0; i < keynum; i++) {
+    key_rand = GetRandomKey(&thread_state->rand, keynum);
+    GenerateKeyFromInt(key_rand, &key);
+    read++;
+    int s;
+    uint64_t value_addr = 0;
+    s = client->GetStringKVHook(key, &value_addr);
+    if(s) {
+      char* p = (char*)value_addr;
+      size_t val_len = *((uint64_t*)p);
+      p += sizeof(size_t);
+      val.assign(p, val_len);
+      found++;
+      total_byte += (key_size + val.size());
+    }
+  }
+
   uint64_t tfinish_ = Clock::NowMicros();
   printf("thread elapse %ld\n", tfinish_ - tstart_);
   bytes.fetch_add(total_byte);
   elapse.fetch_add(tfinish_ - tstart_);
+  printf("%lu of %lu found\n", found, keynum);
 }
 
 void delegate_thread_body(void* ptr) {
@@ -251,7 +349,7 @@ void delegate_thread_body(void* ptr) {
   }
   
   thread_state->stats.start();
-  delegate_func(thread_state);
+  thread_state->method(thread_state);
   thread_state->stats.end();
 
   {
@@ -281,6 +379,7 @@ void delegate_put_test(int num_threads, int keynum) {
     int r = GetCh();
     s->client = new DBClient(db_, i, r);
     s->shared = &shared;
+    s->method = delegate_test;
     tstates.push_back(s);
   }
 
@@ -291,19 +390,20 @@ void delegate_put_test(int num_threads, int keynum) {
   std::unique_lock<std::mutex> lk(shared.mu);
   shared.cv.wait(lk, [&]{return shared.num_initialized == num_threads;});
   
+  uint64_t start;
+  uint64_t finish;
+  start = Clock::NowMicros();
   shared.start = true;
   shared.cv.notify_all();
   shared.cv.wait(lk, [&]{return shared.num_done == num_threads;});
   lk.unlock();
   
-  uint64_t start;
-  uint64_t finish;
-  start = Clock::NowMicros();
   for(int i = 0; i < num_threads; i++) {
     if(dele_clients[i]->joinable()) {
       dele_clients[i]->join();
     }
   }
+
   dp_->Close();
   finish = Clock::NowMicros();
   printf("delegate_put_test detach wait time: %ld\n", finish - start);
@@ -325,7 +425,6 @@ void local_thread_body(void* ptr) {
   SharedState* shared = thread_state->shared;
   int index = thread_state->stats.id_;
   DBClient* client = thread_state->client;
-  
   {
     std::unique_lock<std::mutex> lk(shared->mu);
     shared->num_initialized++;
@@ -336,7 +435,7 @@ void local_thread_body(void* ptr) {
   }
   
   thread_state->stats.start();
-  local_func(thread_state);
+  thread_state->method(thread_state);
   thread_state->stats.end();
 
   {
@@ -351,16 +450,14 @@ void local_thread_body(void* ptr) {
 void local_put_test(int num_threads, int keynum) {
   std::vector<DBClient*> clients(num_threads);
   uint64_t start_ = DBClient::GetPutStringKVCost();
-
-  uint64_t start;
-  uint64_t finish;
-  start = Clock::NowMicros();
   SharedState shared;
   shared.total = num_threads;
   shared.num_initialized = 0;
   shared.num_done = 0;
   shared.start = false;
   shared.keynum = keynum;
+
+  bytes = 0;
 
   std::vector<ThreadState*> tstates;
   
@@ -369,6 +466,7 @@ void local_put_test(int num_threads, int keynum) {
     int r = GetCh();
     s->client = new DBClient(db_, i, r);
     s->shared = &shared;
+    s->method = local_test;
     tstates.push_back(s);
   }
 
@@ -379,6 +477,9 @@ void local_put_test(int num_threads, int keynum) {
   std::unique_lock<std::mutex> lk(shared.mu);
   shared.cv.wait(lk, [&]{return shared.num_initialized == num_threads;});
 
+  uint64_t start;
+  uint64_t finish;
+  start = Clock::NowMicros();
   shared.start = true;
   shared.cv.notify_all();
   shared.cv.wait(lk, [&]{return shared.num_done == num_threads;});
@@ -415,16 +516,31 @@ int main() {
   db_ = new ListDB();
   db_->Init();
 
+  local_test = &local_put_func;
+  delegate_test = &delegate_put_func;
+
   for(int i = 0; i < keynum; i++) {
     keys.push_back(random());
     values.push_back(random());
   }
 
-  // rbp->Close();
-  // dp_->Close();
   uint64_t start;
   uint64_t finish;
-  // bytes = 0;
+
+  RingBufferPool* rbp = new RingBufferPool();
+  rbp->Init();
+  db_->ring_buffer_pool = rbp;
+  dp_ = new DelegatePool();
+  dp_->db_ = db_;
+  dp_->Init();
+  db_->delegate_pool = dp_;
+  sleep(1);
+
+  printf("start delegate test\n");
+  start = Clock::NowMicros();
+  delegate_put_test(client_num, keynum);
+  finish = Clock::NowMicros();
+  printf("delegate_put_test time: %ld\n", finish - start);
 
   // printf("start local test\n");
   // start = Clock::NowMicros();
@@ -433,21 +549,21 @@ int main() {
   // printf("local_put_test time: %ld\n", finish - start);
   // printf("end local test\n");
 
-  bytes = 0;
-  RingBufferPool* rbp = new RingBufferPool();
-  rbp->Init();
-  db_->ring_buffer_pool = rbp;
-  dp_ = new DelegatePool();
-  dp_->db_ = db_;
-  dp_->Init();
-  db_->delegate_pool = dp_;
-  
-  sleep(5);
+  // local_test = &local_get_func;
+  // start = Clock::NowMicros();
+  // local_put_test(client_num, keynum);
+  // finish = Clock::NowMicros();
+  // printf("local_get_test time: %ld\n", finish - start);
+  // printf("end local test\n");
 
-  printf("start delegate test\n");
-  start = Clock::NowMicros();
-  delegate_put_test(client_num, keynum);
-  finish = Clock::NowMicros();
-  printf("delegate_put_test time: %ld\n", finish - start);
-  printf("end delegate test\n");
+  // rbp->Init();
+  // dp_->Init();
+  // sleep(1);
+
+  // delegate_test = &delegate_get_func;
+  // start = Clock::NowMicros();
+  // delegate_put_test(client_num, keynum);
+  // finish = Clock::NowMicros();
+  // printf("delegate_get_test time: %ld\n", finish - start);
+  // printf("end delegate test\n");
 }

@@ -14,7 +14,7 @@ int main() {
     if(i%2) t->type = DelegateType::kPut;
     else t->type = DelegateType::kGet;
     if(t->type == DelegateType::kGet) {
-      t->promise = new std::promise<Value*>();
+      t->promise = new std::promise<uint64_t>();
       
     }
     t->region = i % 2;

@@ -1141,7 +1141,7 @@ class Benchmark {
 
   int listdb_Get(DBClient* client, const std::string_view& key, std::string* value) {
     uint64_t value_addr;
-    bool ret = client->GetStringKV(key, &value_addr);
+    bool ret = client->GetStringKVHook(key, &value_addr);
     if (ret) {
       char* p = (char*) value_addr;
       size_t val_len = *((uint64_t*) p);
@@ -1568,53 +1568,29 @@ class Benchmark {
 
     int64_t stage = 0;
     int64_t num_written = 0;
-    uint64_t start = 0;
-    uint64_t finish = 0;
-    while ((num_per_key_gen != 0) && !duration.Done(entries_per_batch_)) {
-      if (duration.GetStage() != stage) {
-        stage = duration.GetStage();
-        //if (db_.db != nullptr) {
-        //  db_.CreateNewCf(open_options_, stage);
-        //} else {
-        //  for (auto& db : multi_dbs_) {
-        //    db.CreateNewCf(open_options_, stage);
-        //  }
-        //}
-      }
-
+    
+    uint64_t start = Clock::NowMicros();
+    int64_t batch_bytes = 0;
+   while ((num_per_key_gen != 0) && !duration.Done(entries_per_batch_)) {
       size_t id = thread->rand.Next() % num_key_gens;
-      //DBWithColumnFamilies* db_with_cfh = SelectDBWithCfh(id);
-      //batch.Clear();
-      int64_t batch_bytes = 0;
-
+      
       std::string_view val;
-      /* for (int64_t j = 0; j < entries_per_batch_; j++) */ {
-        int64_t rand_num = 0;
-        rand_num = key_gens[id]->Next();
-        GenerateKeyFromInt(rand_num, FLAGS_num, &key);
-        //std::string_view val;
-        val = gen.Generate();
-        batch_bytes += val.size() + key_size_;
-        bytes += val.size() + key_size_;
-        ++num_written;
-      }
-      if (thread->shared->write_rate_limiter.get() != nullptr) {
-        thread->shared->write_rate_limiter->Request(batch_bytes, Env::IO_HIGH, RateLimiter::OpType::kWrite);
-        // Set time at which last op finished to Now() to hide latency and
-        // sleep from rate limiter. Also, do the check once per batch, not
-        // once per write.
-        thread->stats.ResetLastOpTime();
-      }
-      finish = Clock::NowMicros();
-      printf("before pre op gap %ld\n", finish - start);
+      int64_t rand_num = 0;
+      rand_num = key_gens[0]->Next();
+      GenerateKeyFromInt(rand_num, FLAGS_num, &key);
+      val = gen.Generate();
+      batch_bytes += val.size() + key_size_;
+      bytes += val.size() + key_size_;
+      ++num_written;
       s = listdb_Put(thread->client, key, val);
-      start = Clock::NowMicros();
       thread->stats.FinishedOps(nullptr, entries_per_batch_, kWrite);
       if (s != 0/*!s.ok()*/) {
         fprintf(stderr, "put error\n");
         abort();
       }
     }
+    uint64_t finish = Clock::NowMicros();
+    printf("thread elapse %ld\n", finish - start);
     thread->stats.AddBytes(bytes);
   }
 
